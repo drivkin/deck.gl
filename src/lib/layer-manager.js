@@ -48,12 +48,15 @@
 /* eslint-disable no-try-catch */
 import Layer from './layer';
 import {log} from './utils';
+import {window} from './utils/globals';
 import assert from 'assert';
 import {drawLayers, pickLayers} from './draw-and-pick';
 import {LIFECYCLE} from './constants';
 import {Viewport} from './viewports';
+import {setOverride} from './layer-overrides';
 
 import {FramebufferObject} from 'luma.gl';
+import seer from 'seer';
 
 const LOG_PRIORITY_LIFECYCLE = 2;
 const LOG_PRIORITY_LIFECYCLE_MINOR = 3;
@@ -77,7 +80,18 @@ export default class LayerManager {
         layerId: null
       }
     };
+
     Object.seal(this.context);
+
+    seer.listenFor('deck.gl', payload => {
+      if (payload.type !== 'edit') {
+        return;
+      }
+
+      setOverride(payload.itemKey, payload.valuePath, payload.value);
+      const newLayers = this.layers.map(layer => new layer.constructor(layer.props));
+      this.updateLayers({newLayers});
+    });
   }
 
   setViewport(viewport) {
@@ -216,6 +230,22 @@ export default class LayerManager {
   }
 
   /* eslint-disable max-statements */
+  _logLayer(newLayer) {
+    if (!window.__SEER_INITIALIZED__) {
+      return;
+    }
+
+    const simpleProps = Object.keys(newLayer.props).reduce((acc, key) => {
+      if (typeof newLayer.props[key] === 'function') {
+        return acc;
+      }
+      acc[key] = newLayer.props[key];
+      return acc;
+    }, {});
+
+    seer.indexedListItem('deck.gl', newLayer.id, simpleProps);
+  }
+
   _matchSublayers({newLayers, oldLayerMap, generatedLayers}) {
     // Filter out any null layers
     newLayers = newLayers.filter(newLayer => newLayer !== null);
@@ -233,10 +263,12 @@ export default class LayerManager {
           log.once(0, `Multipe new layers with same id ${layerName(newLayer)}`);
         }
 
-
         // Only transfer state at this stage. We must not generate exceptions
         // until all layers' state have been transferred
         if (oldLayer) {
+
+          this._logLayer(newLayer);
+
           log(LOG_PRIORITY_LIFECYCLE_MINOR,
             `matched ${layerName(newLayer)}`, oldLayer, '=>', newLayer);
           this._transferLayerState(oldLayer, newLayer);
